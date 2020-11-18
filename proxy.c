@@ -170,6 +170,7 @@ int main (int argc, char *argv[]) {
                     }else{
                         // printf("\nRecieved client message of size %d from socket %d\n", numbytes, curr_socket);
                         client_message(&(head), &connections_head, curr_socket, buffer, &master_set, numbytes, &size);
+                        printf("Return from client message\n");
                     }
                 }
             }
@@ -185,6 +186,7 @@ void client_message(struct Node ** head, struct connection ** c_head,
     printf("Entered client message\n");
 
     int server_con = has_connection(c_head, curr_socket);
+    printf("server con\n");
     if(server_con != -1) {
         secure_stream(curr_socket, server_con, buffer, numbytes);
         printf("return from secure_stream\n");
@@ -571,9 +573,11 @@ int has_connection(struct connection ** c_head, int socket) {
     }
     struct connection * temp = *(c_head);
     while(temp != NULL) {
+        printf("Connection loop\n");
         if(temp->client_sock == socket) {
             return temp->server_sock;
         }
+        temp = temp->next;
     }
     return -1;
 }
