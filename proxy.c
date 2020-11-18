@@ -187,6 +187,8 @@ void client_message(struct Node ** head, struct connection ** c_head,
     int server_con = has_connection(c_head, curr_socket);
     if(server_con != -1) {
         secure_stream(curr_socket, server_con, buffer, numbytes);
+        printf("return from secure_stream\n");
+        return;
     }
 
     char cpyhost[100];
@@ -476,9 +478,9 @@ void proxy_https(int curr_socket,char * buffer, int numbytes, int webport, char 
     struct sockaddr_in serveraddr;
 
     clientfd = socket(AF_INET, SOCK_STREAM, 0);
-    int optval = 1;
+    /*int optval = 1;
     setsockopt(clientfd, SOL_SOCKET, SO_REUSEADDR, 
-	            (const void *)&optval , sizeof(int));
+	            (const void *)&optval , sizeof(int));*/
         
     //get hostbyname
     host_name =  strtok(headerHost, " ");
@@ -501,6 +503,11 @@ void proxy_https(int curr_socket,char * buffer, int numbytes, int webport, char 
         close(clientfd);
         exit(0);
     }
+    struct timeval tv;
+    tv.tv_sec = 1;
+    tv.tv_usec = 0;
+    setsockopt(clientfd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
+
     bzero((char *) &serveraddr, sizeof(serveraddr));
     serveraddr.sin_family = AF_INET;
     bcopy((char *)server->h_addr, (char *)&serveraddr.sin_addr.s_addr,
@@ -516,10 +523,10 @@ void proxy_https(int curr_socket,char * buffer, int numbytes, int webport, char 
     //Forward Client request to Webserver
     printf("Client Request: \n");
     printf("%s\n", buffer);
-    write(clientfd, buffer, strlen(buffer));
+    //write(clientfd, buffer, strlen(buffer));
 
     //Read Server Reply
-    printf("Reading server reply\n");
+    /*printf("Reading server reply\n");
     char * bigbuf = (char *) malloc(10000000);
     char * bufchunk = (char *) malloc(10000000);
     
@@ -530,11 +537,12 @@ void proxy_https(int curr_socket,char * buffer, int numbytes, int webport, char 
     while((count = read(clientfd, bufchunk, 10000000)) > 0){
         memcpy(bigbuf + contentsize, bufchunk, count);
         contentsize = contentsize + count;
-    }
+    } */
 
+    char bigbuf[100] = "HTTP/1.1 200 Connection established\r\n\r\n\0";
     printf("Server Response: \n");
     printf("%s\n", bigbuf);
-    write(curr_socket, bigbuf, contentsize);
+    write(curr_socket, bigbuf, strlen(bigbuf));
 
     struct connection* temp = NULL;
     temp = (struct connection*)malloc(sizeof(struct connection));
@@ -542,7 +550,6 @@ void proxy_https(int curr_socket,char * buffer, int numbytes, int webport, char 
     temp->server_sock = clientfd;
     temp->next = *(c_head);
     *(c_head) = temp;
-    free(bigbuf);
 }
 
 void print_list(struct Node * head) {
@@ -582,18 +589,25 @@ void secure_stream(int curr_socket, int server_con, char * buffer, int numbytes)
     int count;
     int contentsize = 0;
     while((count = read(server_con, bufchunk, 10000000)) > 0){
+        printf("reading from server\n");
         memcpy(bigbuf + contentsize, bufchunk, count);
         contentsize = contentsize + count;
+        printf("COUNT: %d\n", count);
+        bzero(bufchunk, 10000000);
     }
+    printf("out of while\n");
     write(curr_socket, bigbuf, contentsize);
     free(bigbuf);
+    printf("done with ss\n");
 }
 
 /*
 void append_connection(int client_sock, int server_sock, struct connection ** c_head) {
     struct connection * new_connection = malloc(sizeof(struct connection));
-    new_connection->cli
+    new_connection->client_sock = client_sock;
+    new_connection->server_sock = server_sock;
     if(*(c_head) == NULL) {
+        *chead = new_connection;
         
     }
 } */
