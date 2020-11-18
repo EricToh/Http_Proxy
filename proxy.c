@@ -25,6 +25,8 @@
 // CONSTANTS
 const int OBJECT_MAX = 10000;
 const int CACHE_SIZE = 10;
+const int GET = 1;
+const int CON = 2;
 
 
 //STRUCTURES
@@ -42,6 +44,7 @@ struct connection {
     int client_sock;
     int server_sock;
     struct connection * next;
+    struct connection * prev;
 };
 
 // FUNCTION DECLARATIONS
@@ -54,12 +57,12 @@ void proxy_http(struct Node ** head, int curr_socket, char * buffer,
                 int * size);
 void proxy_https(int curr_socket,char * buffer, int numbytes, int webport, char * host_name, 
                  char * headerHost, struct connection ** c_head);
-void print_list(struct Node * head);
-int has_connection(struct connection ** c_head, int socket);
 void secure_stream(int curr_socket, int server_con, char * buffer, int numbytes);
+void print_list(struct Node * head);
+void print_connection(struct connection * head);
+void remove_connection(struct connection ** c_head, int socket);
+int has_connection(struct connection ** c_head, int socket);
 
-
-//void proxy_https();
 
 // SMALL HELPER FUNCTIONS
 void error(const char *msg)
@@ -76,19 +79,15 @@ int max(int num1,int num2) {
 
 //MAIN
 int main (int argc, char *argv[]) {
-    fprintf(stderr, "START\n");
     int master_sock, client_sock, server_port, curr_socket, numbytes;
     int size = 0;
     struct sockaddr_in server_address, client_address;
     socklen_t clilen;
-    printf("BEFORE BUFFER\n");
     char * buffer = malloc(OBJECT_MAX);
+    // Head of Cache
     struct Node* head = NULL;
-
-    // Create Connections data structure
+    // Head of client structure
     struct connection * connections_head = NULL;
-
-    // Create Cache
 
     // Get port number to bind to
     if (argc != 2) {
@@ -113,6 +112,7 @@ int main (int argc, char *argv[]) {
     server_address.sin_port = htons(server_port);
 
     //Bind Socket to our port
+    printf("Binding socket\n");
     if (bind(master_sock, (struct sockaddr *) &server_address, sizeof(server_address)) < 0) {
         error("Error on binding");
     }
@@ -136,39 +136,35 @@ int main (int argc, char *argv[]) {
     //Main Loop for select and accepting clients
     printf("Entering main loop for select\n");
     while(1) {
-        if(head == NULL)
-            printf("HEAD is NULL\n");
-        if(head != NULL)
-            printf("HEAD is NOT NULL\n");
         temp_set = master_set;
         select(fdmax + 1, &temp_set, NULL, NULL, NULL); 
 
         // If main socket is expecting new connection
         if(FD_ISSET(master_sock, &temp_set)) {
-            printf("New connection from client\n");
+            printf("\nNew socket connection from client on socket");
             clilen = (size_t)sizeof(client_address);
             client_sock = accept(master_sock, (struct sockaddr *) &client_address, &clilen);
             if (client_sock < 0) {
                 error ("accept");
             }
+            printf("%d\n\n", client_sock);
             FD_SET(client_sock, &master_set);
             fdmax = max(client_sock,fdmax);
         } else {
-            // Data from already connected socket
-            printf("Data from already connected client\n");
 
             for(curr_socket = 0; curr_socket <= fdmax; curr_socket++) {
                 if(FD_ISSET(curr_socket, &temp_set)) {
-                    // printf("Socket %d is set\n",curr_socket);
+                    printf("\nSocket %d is set\n",curr_socket);
                     numbytes = recv(curr_socket, buffer, OBJECT_MAX-1, 0);
                     if (numbytes < 0) {
+                        printf("Less than 0 read from socket %d\n", curr_socket);
                         FD_CLR(curr_socket, &master_set);
                     }else if (numbytes == 0) {
-                        printf("Client has left in orderly conduct\n");
+                        printf("Client %d has left in orderly conduct\n", curr_socket);
                         FD_CLR(curr_socket, &master_set);
                         //remove_client(clients, curr_socket, &master_set);
                     }else{
-                        // printf("\nRecieved client message of size %d from socket %d\n", numbytes, curr_socket);
+                        printf("Recieved client message of size %d from socket %d\n", numbytes, curr_socket);
                         client_message(&(head), &connections_head, curr_socket, buffer, &master_set, numbytes, &size);
                         printf("Return from client message\n");
                     }
@@ -183,10 +179,10 @@ int main (int argc, char *argv[]) {
 void client_message(struct Node ** head, struct connection ** c_head,
                     int curr_socket, char * buffer, fd_set * master_set, 
                     int numbytes, int * size){
-    printf("Entered client message\n");
+    // printf("Entered client message\n");
 
     int server_con = has_connection(c_head, curr_socket);
-    printf("server con\n");
+    // printf("server con\n");
     if(server_con != -1) {
         secure_stream(curr_socket, server_con, buffer, numbytes);
         printf("return from secure_stream\n");
@@ -207,13 +203,14 @@ void client_message(struct Node ** head, struct connection ** c_head,
     memcpy(newbuffer, buffer, numbytes);
     curr_line = strtok(newbuffer,delim);
         
-    int connectR = 0;
+    int status = 0;
     if(curr_line[0] == 'G'&& curr_line[1] == 'E' && curr_line[2] == 'T'){
         strcpy(headerGET, curr_line);
+        status = GET;
     }
     if(curr_line[0] == 'C'&& curr_line[1] == 'O' && curr_line[2] == 'N'){
         strcpy(headerGET, curr_line);
-        connectR = 1;
+        status = CON;
     }
     if(curr_line[0] == 'H' && curr_line[1] == 'o' && curr_line[2] == 's'){
         strcpy(headerHost, curr_line);
@@ -222,12 +219,13 @@ void client_message(struct Node ** head, struct connection ** c_head,
         if(curr_line[0] == 'G' && curr_line[1] == 'E' && 
             curr_line[2] == 'T'){
             strcpy(headerGET, curr_line);
+            status = GET;
         }
         if(curr_line[0] == 'C' && curr_line[1] == 'O' && 
             curr_line[2] == 'N'){
             strcpy(headerGET, curr_line);
-            connectR = 1;
-            }
+            status = CON;
+        }
         if(curr_line[0] == 'H' && curr_line[1] == 'o' && 
             curr_line[2] == 's'){
             strcpy(headerHost, curr_line);
@@ -243,12 +241,16 @@ void client_message(struct Node ** head, struct connection ** c_head,
     }else{
         webport = 80;
     }
-    if(connectR == 1){
+    if(status == CON){
         proxy_https(curr_socket, buffer, numbytes, webport, host_name, headerHost, c_head);
         return;
-    }else{
+    }else if(status == GET){
         proxy_http(head, curr_socket, buffer, master_set, numbytes, webport,
                      host_name, headerGET, headerHost, size);
+        close(curr_socket);
+        FD_CLR(curr_socket, master_set);
+    }else {
+        printf("Message is not a get or connect and does not come from and established connection\n");
         close(curr_socket);
         FD_CLR(curr_socket, master_set);
     }
@@ -270,18 +272,15 @@ void proxy_http(struct Node ** head, int curr_socket, char * buffer,
     rawtime = time (NULL);
     iterate = *(head);
     int update = 0;
-    printf("Searching cache\n");
+    printf("Searching cache for headerGet: %s\n", headerGET);
     printf("cache Size: %d\n", *(size));
     for(int i=0; i<*(size); i++){
-        if(iterate == NULL)
-            printf("FUCK\n");
-        printf("cache for loop\n");
-        printf("headerGET: %s\n", headerGET);
-        printf("iterate->key: %s\n", iterate->key);
+        // printf("cache for loop\n");
+        printf("%d: iterate->key: %s\n", i, iterate->key);
         if(strcmp(headerGET, iterate->key) == 0 && 
             (iterate->age + iterate->time) > rawtime &&
             iterate->port == webport){
-            printf("Found in cache\n");
+            printf("Cache hit\n");
             char * objcopy = (char *) malloc(10000000);
             char agestring[100] = "Age: ";
             char agenumber[95];
@@ -316,7 +315,7 @@ void proxy_http(struct Node ** head, int curr_socket, char * buffer,
         before_iterate = iterate;
         iterate = iterate->next;
     }
-    printf("Done Searching cache\n");
+    printf("No cache hit\n");
 
         
     //Skips Contacting the webserver if request already in Cache
@@ -465,7 +464,6 @@ void proxy_http(struct Node ** head, int curr_socket, char * buffer,
             *(head) = temp;
         }
     }
-        
 
     //Send reply to Client
     write(curr_socket, bigbuf, contentsize);
@@ -475,13 +473,13 @@ void proxy_http(struct Node ** head, int curr_socket, char * buffer,
 void proxy_https(int curr_socket,char * buffer, int numbytes, int webport, char * host_name, 
                  char * headerHost, struct connection ** c_head){
     printf("HTTPS\n");
-    int clientfd;
+    int server_sock;
     struct hostent *server;
     struct sockaddr_in serveraddr;
 
-    clientfd = socket(AF_INET, SOCK_STREAM, 0);
+    server_sock = socket(AF_INET, SOCK_STREAM, 0);
     /*int optval = 1;
-    setsockopt(clientfd, SOL_SOCKET, SO_REUSEADDR, 
+    setsockopt(server_sock, SOL_SOCKET, SO_REUSEADDR, 
 	            (const void *)&optval , sizeof(int));*/
         
     //get hostbyname
@@ -502,13 +500,13 @@ void proxy_https(int curr_socket,char * buffer, int numbytes, int webport, char 
     server = gethostbyname(tempname);
     if(server == NULL) {
         fprintf(stderr, "ERROR, no such host as %s\n", tempname);
-        close(clientfd);
+        close(server_sock);
         exit(0);
     }
     struct timeval tv;
     tv.tv_sec = 1;
     tv.tv_usec = 0;
-    setsockopt(clientfd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
+    setsockopt(server_sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
 
     bzero((char *) &serveraddr, sizeof(serveraddr));
     serveraddr.sin_family = AF_INET;
@@ -517,7 +515,7 @@ void proxy_https(int curr_socket,char * buffer, int numbytes, int webport, char 
     serveraddr.sin_port = htons(webport);
 
     //connect to webserver
-    if(connect(clientfd, (struct sockaddr*) &serveraddr, 
+    if(connect(server_sock, (struct sockaddr*) &serveraddr, 
        sizeof(serveraddr)) < 0){
         fprintf(stderr, "ERROR connecting");
     }
@@ -525,7 +523,7 @@ void proxy_https(int curr_socket,char * buffer, int numbytes, int webport, char 
     //Forward Client request to Webserver
     printf("Client Request: \n");
     printf("%s\n", buffer);
-    //write(clientfd, buffer, strlen(buffer));
+    //write(server_sock, buffer, strlen(buffer));
 
     //Read Server Reply
     /*printf("Reading server reply\n");
@@ -536,7 +534,7 @@ void proxy_https(int curr_socket,char * buffer, int numbytes, int webport, char 
     bzero(bigbuf, 10000000);
     int count;
     int contentsize = 0;
-    while((count = read(clientfd, bufchunk, 10000000)) > 0){
+    while((count = read(server_sock, bufchunk, 10000000)) > 0){
         memcpy(bigbuf + contentsize, bufchunk, count);
         contentsize = contentsize + count;
     } */
@@ -544,17 +542,45 @@ void proxy_https(int curr_socket,char * buffer, int numbytes, int webport, char 
     char bigbuf[100] = "HTTP/1.1 200 Connection established\r\n\r\n\0";
     printf("Server Response: \n");
     printf("%s\n", bigbuf);
+    printf("-------CONNECTION ESTABLISHED--------\nClient Socket: %d\nServer socket: %d\n------------------------------\n",curr_socket,server_sock);
     write(curr_socket, bigbuf, strlen(bigbuf));
 
     struct connection* temp = NULL;
     temp = (struct connection*)malloc(sizeof(struct connection));
     temp->client_sock = curr_socket;
-    temp->server_sock = clientfd;
+    temp->server_sock = server_sock;
     temp->next = *(c_head);
     *(c_head) = temp;
 }
 
+void secure_stream(int curr_socket, int server_con, char * buffer, int numbytes){
+    printf("Found existing connection, sending %d msg to server\n",numbytes);
+    write(server_con, buffer, numbytes);
+    char * bigbuf = (char *) malloc(10000000);
+    char * bufchunk = (char *) malloc(10000000);
+    
+    bzero(buffer, OBJECT_MAX);
+    bzero(bigbuf, 10000000);
+    int count;
+    int contentsize = 0;
+    printf("Reading from server on socket %d\n",server_con);
+    while((count = read(server_con, bufchunk, 10000000)) > 0){
+        memcpy(bigbuf + contentsize, bufchunk, count);
+        contentsize = contentsize + count;
+        printf("Read message of size: %d\n", count);
+        bzero(bufchunk, 10000000);
+    }
+    printf("Finished reading from server, sending buffer to client on socket %d\n", curr_socket);
+    int n = write(curr_socket, bigbuf, contentsize);
+    if (n < 0) {
+        fprintf(stderr, "Error writing to client via connect");
+    }
+    free(bigbuf);
+}
+
+
 void print_list(struct Node * head) {
+    printf("\nPrinting Cache \n");
     if(head == NULL) {
         printf("This specific list is empty\n");
         return;
@@ -567,13 +593,27 @@ void print_list(struct Node * head) {
     printf("\n");
 }
 
+void print_connection(struct connection * head) {
+    printf("\nPrinting connection list\n");
+    if(head == NULL) {
+        printf("This specific list is empty\n");
+        return;
+    }
+    struct connection * temp = head;
+    while(temp != NULL) {
+        printf("Connection between client socket %d and server socket %d\n", temp->client_sock, temp->server_sock);
+    }
+    printf("\n");
+}
+
+
 int has_connection(struct connection ** c_head, int socket) {
+    printf("Searching for existing connection\n");
     if(*(c_head) == NULL) {
         return -1;
     }
     struct connection * temp = *(c_head);
     while(temp != NULL) {
-        printf("Connection loop\n");
         if(temp->client_sock == socket) {
             return temp->server_sock;
         }
@@ -582,36 +622,44 @@ int has_connection(struct connection ** c_head, int socket) {
     return -1;
 }
 
-void secure_stream(int curr_socket, int server_con, char * buffer, int numbytes){
-    printf("Secure Stream\n");
-    write(server_con, buffer, numbytes);
-    char * bigbuf = (char *) malloc(10000000);
-    char * bufchunk = (char *) malloc(10000000);
-    
-    bzero(buffer, OBJECT_MAX);
-    bzero(bigbuf, 10000000);
-    int count;
-    int contentsize = 0;
-    while((count = read(server_con, bufchunk, 10000000)) > 0){
-        printf("reading from server\n");
-        memcpy(bigbuf + contentsize, bufchunk, count);
-        contentsize = contentsize + count;
-        printf("COUNT: %d\n", count);
-        bzero(bufchunk, 10000000);
+void remove_connection(struct connection ** c_head, int socket) {
+    printf("Removing connection of client %d\n", socket);
+    if(*(c_head) == NULL) {
+        return;
     }
-    printf("out of while\n");
-    write(curr_socket, bigbuf, contentsize);
-    free(bigbuf);
-    printf("done with ss\n");
+    struct connection * temp = *(c_head);
+    while(temp != NULL) {
+        if(temp->client_sock == socket) {
+            if(temp->prev != NULL) {
+                temp->prev->next = temp->next;
+            }
+            if(temp->next != NULL) {
+                temp->next->prev = temp->prev;
+            }
+            free(temp);
+            return;
+        }
+        temp = temp->next;
+    }
 }
 
-/*
+
 void append_connection(int client_sock, int server_sock, struct connection ** c_head) {
+    printf("Appending connection of client %d\n", client_sock);
     struct connection * new_connection = malloc(sizeof(struct connection));
     new_connection->client_sock = client_sock;
     new_connection->server_sock = server_sock;
     if(*(c_head) == NULL) {
-        *chead = new_connection;
-        
+        *c_head = new_connection;
+        new_connection->next = NULL;
+        new_connection->prev = NULL;
+        return;
     }
-} */
+    struct connection * temp = *(c_head);
+    while(temp->next != NULL) {
+        temp = temp->next;
+    }
+    temp->next = new_connection;
+    new_connection->next = NULL;
+    new_connection->prev = temp;
+}
