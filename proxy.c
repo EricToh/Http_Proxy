@@ -103,9 +103,10 @@ int main (int argc, char *argv[]) {
         error("Error opening main socket");
     }
 
-    int optval = 1;
-    setsockopt(master_sock, SOL_SOCKET, SO_REUSEADDR,
-               (const void *)&optval , sizeof(int));
+    struct timeval tv;
+    tv.tv_sec = 0;
+    tv.tv_usec = 50000;
+    setsockopt(master_sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
     bzero((char *) &server_address, sizeof(server_address));
     server_address.sin_family = AF_INET;
     server_address.sin_addr.s_addr = INADDR_ANY;
@@ -328,10 +329,10 @@ void proxy_http(struct Node ** head, int curr_socket, char * buffer,
     //Create socket for web server
     int clientfd;
     clientfd = socket(AF_INET, SOCK_STREAM, 0);
-    int optval = 1;
-    setsockopt(clientfd, SOL_SOCKET, SO_REUSEADDR, 
-	            (const void *)&optval , sizeof(int));
-        
+    struct timeval tv;
+    tv.tv_sec = 0;
+    tv.tv_usec = 50000;
+    setsockopt(clientfd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
     //get hostbyname
     host_name =  strtok(headerHost, " ");
     host_name = strtok(NULL, " ");
@@ -380,10 +381,12 @@ void proxy_http(struct Node ** head, int curr_socket, char * buffer,
     bzero(bigbuf, 10000000);
     int count;
     int contentsize = 0;
-    while((count = read(clientfd, bufchunk, 10000000)) > 0){
+    while((count = recv(clientfd,bufchunk,10000000, 0)) > 0){
+        printf("Read a HTTP server reply of size %d\n", count);
         memcpy(bigbuf + contentsize, bufchunk, count);
         contentsize = contentsize + count;
     }
+    printf("Read a HTTP server reply of size %d\n", count);
     printf("Finished reading from server\n");
 
     close(clientfd);
@@ -478,9 +481,11 @@ void proxy_https(int curr_socket,char * buffer, int numbytes, int webport, char 
     struct sockaddr_in serveraddr;
 
     server_sock = socket(AF_INET, SOCK_STREAM, 0);
-    /*int optval = 1;
-    setsockopt(server_sock, SOL_SOCKET, SO_REUSEADDR, 
-	            (const void *)&optval , sizeof(int));*/
+
+    struct timeval tv;
+    tv.tv_sec = 0;
+    tv.tv_usec = 100000;
+    setsockopt(server_sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
         
     //get hostbyname
     host_name =  strtok(headerHost, " ");
@@ -503,10 +508,6 @@ void proxy_https(int curr_socket,char * buffer, int numbytes, int webport, char 
         close(server_sock);
         exit(0);
     }
-    struct timeval tv;
-    tv.tv_sec = 1;
-    tv.tv_usec = 0;
-    setsockopt(server_sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
 
     bzero((char *) &serveraddr, sizeof(serveraddr));
     serveraddr.sin_family = AF_INET;
