@@ -78,6 +78,7 @@ int has_connection(struct Connections * connections, int socket);
 void prepend_connection(int client_sock, int server_sock, struct Connections * connections);
 void remove_cache_node(struct Cache * cache, struct Node * node);
 void prepend_cache_node(struct Cache * cache, struct Node * node);
+void chain_front(struct Cache * cache, struct Node * node);
 void remove_stale(struct Cache * cache);
 bool is_stale(struct Node * node);
 struct Cache * create_cache();
@@ -361,6 +362,8 @@ void proxy_http(struct Cache * cache, int curr_socket, char * buffer,
                    cache_hit->object + placement_index, 
                    cache_hit->size - placement_index);
 
+            chain_front(cache, cache_hit);
+
             printf("Writing stored data\n");
             write(curr_socket, objcopy, cache_hit->size + age_len + 1);
             return;
@@ -466,6 +469,7 @@ void proxy_http(struct Cache * cache, int curr_socket, char * buffer,
         remove_stale(cache);
     }else if (cache->num_elements == cache->capacity){
         //Remove oldest
+
     }
     prepend_cache_node(cache,temp);
 
@@ -613,10 +617,19 @@ int has_connection(struct Connections * connections, int socket){
     }
     struct connection * temp = head;
     while(temp != NULL) {
-        printf("Client: %d, Server: %d\n",temp->client_sock, temp->server_sock);
-        if(temp->client_sock == socket) {
-            printf("Connection found\n");
-            return temp->server_sock;
+        int client_sock = temp->client_sock;
+        int server_sock = temp->server_sock;
+        printf("Client: %d, Server: %d\n",client_sock, server_sock);
+        if(client_sock == socket) {
+            printf("Connection found, is a client\n");
+            remove_connection(connections, client_sock);
+            prepend_connection(client_sock, server_sock, connections);
+            return server_sock;
+        }else if (server_sock == socket) {
+            printf("Connection found, is a server\n");
+            remove_connection(connections, client_sock);
+            prepend_connection(client_sock, server_sock, connections);
+            return client_sock;
         }
         temp = temp->next;
     }
@@ -631,9 +644,11 @@ void remove_connection(struct Connections * connections, int socket) {
     }
     struct connection * temp = head;
     while(temp != NULL) {
-        if(temp->client_sock == socket) {
+        if(temp->client_sock == socket || temp->server_sock == socket) {
             if(temp->prev != NULL) {
                 temp->prev->next = temp->next;
+            }else {
+                connections->head = temp->next;
             }
             if(temp->next != NULL) {
                 temp->next->prev = temp->prev;
@@ -667,6 +682,7 @@ void prepend_connection(int client_sock, int server_sock, struct Connections * c
     connections->num_connections += 1;
     printf("Successful prepend\n");
 }
+
 
 void remove_cache_node(struct Cache * cache, struct Node * node) {
     if(cache == NULL || cache->table == NULL || node == NULL) {
@@ -708,7 +724,31 @@ void prepend_cache_node(struct Cache * cache, struct Node * node) {
     node->prev = NULL;
     cache->num_elements += 1;
     printf("Successfully prepended node\n");
+}
 
+// Moves a cache node to the front of its chain
+void chain_front(struct Cache * cache, struct Node * node) {
+    printf("Moving node to front of chain\n");
+    if(cache == NULL || cache->table == NULL || node == NULL) {
+        return;
+    }
+    int hash_val = (int)(hash(node->key)%TABLE_SIZE);
+    struct Node * temp = cache->table[hash_val];
+    if(temp == node) {
+        printf("Node already at front\n");
+        return;
+    }
+    struct Node * prev = node->prev;
+    struct Node * next = node->next;
+    if(prev != NULL) {
+        prev->next = next;
+        if(next != NULL)
+            next->prev = prev;
+    }
+    cache->table[hash_val] = node;
+    node->next = temp;
+    temp->prev = node;
+    printf("Node position updated\n");
 }
 
 // Removes all stale objects in the cache
