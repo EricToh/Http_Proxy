@@ -64,12 +64,11 @@ struct Connections {
 
 // FUNCTION DECLARATIONS
 void client_message(struct Cache * cache, struct Connections * connections,
-                    int curr_socket, char * buffer, fd_set * master_set, 
-                    int numbytes);
+                    int curr_socket, char * buffer, fd_set * master_set, int numbytes, int * fdmax);
 void proxy_http(struct Cache * cache, int curr_socket, char * buffer,
-                fd_set * master_set, int numbytes, int webport,
+                fd_set * master_set,  int numbytes, int webport,
                 char * host_name, char * headerGET, char * headerHost);
-void proxy_https(int curr_socket,char * buffer, int numbytes, int webport, char * host_name, char * headerHost, struct Connections * connections);
+void proxy_https(int curr_socket,char * buffer, int numbytes, int webport, char * host_name, char * headerHost, struct Connections * connections, fd_set * master_set, int * fdmax);
 void secure_stream(int curr_socket, int server_con, char * buffer, int numbytes);
 void print_list(struct Node * head);
 void print_connection(struct connection * head);
@@ -167,13 +166,14 @@ int main (int argc, char *argv[]) {
 
     // Add master socket to set and save the fd
     FD_SET(master_sock, &master_set);
-    int fdmax = master_sock;
+    int * fdmax = malloc(sizeof(int));
+    *fdmax = master_sock;
 
     //Main Loop for select and accepting clients
     printf("Entering main loop for select\n");
     while(1) {
         temp_set = master_set;
-        select(fdmax + 1, &temp_set, NULL, NULL, NULL); 
+        select(*fdmax + 1, &temp_set, NULL, NULL, NULL); 
 
         // If main socket is expecting new connection
         if(FD_ISSET(master_sock, &temp_set)) {
@@ -185,23 +185,24 @@ int main (int argc, char *argv[]) {
             }
             printf("%d\n\n", client_sock);
             FD_SET(client_sock, &master_set);
-            fdmax = max(client_sock,fdmax);
+            *fdmax = max(client_sock,*fdmax);
         } else {
 
-            for(curr_socket = 0; curr_socket <= fdmax; curr_socket++) {
+            for(curr_socket = 0; curr_socket <= *fdmax; curr_socket++) {
+                // printf("Current check: %d\n", curr_socket);
                 if(FD_ISSET(curr_socket, &temp_set)) {
                     printf("\nSocket %d is set\n",curr_socket);
                     numbytes = recv(curr_socket, buffer, OBJECT_MAX-1, 0);
                     if (numbytes < 0) {
                         printf("Less than 0 read from socket %d\n", curr_socket);
-                        FD_CLR(curr_socket, &master_set);
                     }else if (numbytes == 0) {
                         printf("Client %d has left in orderly conduct\n", curr_socket);
+                        remove_connection(connections, curr_socket);
                         FD_CLR(curr_socket, &master_set);
                         //remove_client(clients, curr_socket, &master_set);
                     }else{
                         printf("Recieved client message of size %d from socket %d\n", numbytes, curr_socket);
-                        client_message(cache, connections, curr_socket, buffer, &master_set, numbytes);
+                        client_message(cache, connections, curr_socket, buffer, &master_set, numbytes, fdmax);
                         printf("Return from client message\n");
                     }
                 }
@@ -213,14 +214,13 @@ int main (int argc, char *argv[]) {
 
 // Function to deal with the client's message
 void client_message(struct Cache * cache, struct Connections * connections,
-                    int curr_socket, char * buffer, fd_set * master_set, 
-                    int numbytes){
+                    int curr_socket, char * buffer, fd_set * master_set, int numbytes, int * fdmax){
     // printf("Entered client message\n");
 
-    int server_con = has_connection(connections, curr_socket);
+    int partner_con = has_connection(connections, curr_socket);
     // printf("server con\n");
-    if(server_con != -1) {
-        secure_stream(curr_socket, server_con, buffer, numbytes);
+    if(partner_con != -1) {
+        secure_stream(curr_socket, partner_con, buffer, numbytes);
         printf("return from secure_stream\n");
         return;
     }
@@ -281,7 +281,7 @@ void client_message(struct Cache * cache, struct Connections * connections,
         webport = 80;
     }
     if(status == CON){
-        proxy_https(curr_socket, buffer, numbytes, webport, host_name, headerHost, connections);
+        proxy_https(curr_socket, buffer, numbytes, webport, host_name, headerHost, connections, master_set, fdmax);
         return;
     }else if(status == GET){
         proxy_http(cache, curr_socket, buffer, master_set, numbytes, webport,
@@ -479,11 +479,12 @@ void proxy_http(struct Cache * cache, int curr_socket, char * buffer,
     free(bufchunk);
 }
 
-void proxy_https(int curr_socket,char * buffer, int numbytes, int webport, char * host_name, char * headerHost, struct Connections * connections){
+void proxy_https(int curr_socket,char * buffer, int numbytes, int webport, char * host_name, char * headerHost, struct Connections * connections, fd_set * master_set, int * fdmax){
     printf("HTTPS\n");
     int server_sock;
     struct hostent *server;
     struct sockaddr_in serveraddr;
+    char * buf = malloc(OBJECT_MAX);
 
     server_sock = socket(AF_INET, SOCK_STREAM, 0);
 
@@ -531,52 +532,25 @@ void proxy_https(int curr_socket,char * buffer, int numbytes, int webport, char 
     printf("%s\n", buffer);
     //write(server_sock, buffer, strlen(buffer));
 
-    //Read Server Reply
-    /*printf("Reading server reply\n");
-    char * bigbuf = (char *) malloc(10000000);
-    char * bufchunk = (char *) malloc(10000000);
-    
-    bzero(buffer, OBJECT_MAX);
-    bzero(bigbuf, 10000000);
-    int count;
-    int contentsize = 0;
-    while((count = read(server_sock, bufchunk, 10000000)) > 0){
-        memcpy(bigbuf + contentsize, bufchunk, count);
-        contentsize = contentsize + count;
-    } */
-
+    // Creating connection success message
     char bigbuf[100] = "HTTP/1.1 200 Connection established\r\n\r\n\0";
     printf("Server Response: \n");
-    printf("%s\n", bigbuf);
     printf("-------CONNECTION ESTABLISHED--------\nClient Socket: %d\nServer socket: %d\n------------------------------\n",curr_socket,server_sock);
-    write(curr_socket, bigbuf, strlen(bigbuf));
+
+    printf("Sending %s to %d\n", bigbuf, curr_socket);
+    int n = write(curr_socket, bigbuf, strlen(bigbuf));
+    printf("Sent msg of size %d\n", n);
 
     prepend_connection(curr_socket, server_sock, connections);
+
+    *fdmax = max(server_sock,*fdmax);
+    FD_SET(server_sock, master_set);
 }
 
-void secure_stream(int curr_socket, int server_con, char * buffer, int numbytes){
-    printf("Found existing connection, sending %d msg to server\n",numbytes);
-    write(server_con, buffer, numbytes);
-    char * bigbuf = (char *) malloc(10000000);
-    char * bufchunk = (char *) malloc(10000000);
-    
-    bzero(buffer, OBJECT_MAX);
-    bzero(bigbuf, 10000000);
-    int count;
-    int contentsize = 0;
-    printf("Reading from server on socket %d\n",server_con);
-    while((count = read(server_con, bufchunk, 10000000)) > 0){
-        memcpy(bigbuf + contentsize, bufchunk, count);
-        contentsize = contentsize + count;
-        printf("Read message of size: %d\n", count);
-        bzero(bufchunk, 10000000);
-    }
-    printf("Finished reading from server, sending buffer to client on socket %d\n", curr_socket);
-    int n = write(curr_socket, bigbuf, contentsize);
-    if (n < 0) {
-        fprintf(stderr, "Error writing to client via connect");
-    }
-    free(bigbuf);
+void secure_stream(int socket, int socket_partner, char * buffer, int numbytes){
+    printf("Found existing connection, sending %d msg to %d\n",numbytes,socket_partner);
+    int n = write(socket_partner, buffer, numbytes);
+    printf("Sent msg of size %d\n", n);
 }
 
 
@@ -609,7 +583,7 @@ void print_connection(struct connection * head) {
 
 
 int has_connection(struct Connections * connections, int socket){
-    printf("Searching for existing connection, Client Socket: %d\n", socket);
+    printf("Searching for existing connection, Socket: %d\n", socket);
     struct connection * head = connections->head;
     if(head == NULL) {
         printf("Connections is empty\n");
