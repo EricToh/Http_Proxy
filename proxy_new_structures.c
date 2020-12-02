@@ -33,7 +33,7 @@ const int TABLE_MAX = 30;
 
 //STRUCTURES
 struct Node{
-    char key[100];
+    char key[1000];
     char object[10000000];
     int time;
     int age;
@@ -226,8 +226,8 @@ void client_message(struct Cache * cache, struct Connections * connections,
     }
 
     char cpyhost[100];
-    char headerGET[100];
-    char headerHost[100];
+    char headerGET[1000];
+    char headerHost[1000];
     int webport;
     char *curr_line = NULL;
     char *host_name = NULL;
@@ -241,17 +241,23 @@ void client_message(struct Cache * cache, struct Connections * connections,
     curr_line = strtok(newbuffer,delim);
         
     int status = 0;
+    printf("If statement\n");
     if(curr_line[0] == 'G'&& curr_line[1] == 'E' && curr_line[2] == 'T'){
+        printf("curr_line: %s\n", curr_line);
         strcpy(headerGET, curr_line);
+        printf("STRCPY COMPLETE\n");
         status = GET;
     }
     if(curr_line[0] == 'C'&& curr_line[1] == 'O' && curr_line[2] == 'N'){
+        printf("CON\n");
         strcpy(headerGET, curr_line);
         status = CON;
     }
     if(curr_line[0] == 'H' && curr_line[1] == 'o' && curr_line[2] == 's'){
+        printf("HOST\n");
         strcpy(headerHost, curr_line);
     }
+    printf("while statement\n");
     while((curr_line = strtok(NULL, delim)) != NULL){
         printf("Currline: %s\n",curr_line);
         if(curr_line[0] == 'G' && curr_line[1] == 'E' && 
@@ -342,7 +348,7 @@ void proxy_http(struct Cache * cache, int curr_socket, char * buffer,
         if((cache_hit->age + cache_hit->time) > rawtime &&
         cache_hit->port == webport){
             printf("Normal Cache hit\n");
-            char * objcopy = (char *) malloc(10000000);
+            /*char * objcopy = (char *) malloc(10000000);
             char agestring[100] = "Age: ";
             char agenumber[95];
             sprintf(agenumber, "%ld", (rawtime - cache_hit->time));
@@ -360,12 +366,13 @@ void proxy_http(struct Cache * cache, int curr_socket, char * buffer,
             memcpy(objcopy + placement_index + 1, agestring, age_len);
             memcpy(objcopy + placement_index + age_len + 1,
                    cache_hit->object + placement_index, 
-                   cache_hit->size - placement_index);
+                   cache_hit->size - placement_index); */
 
             chain_front(cache, cache_hit);
 
             printf("Writing stored data\n");
-            write(curr_socket, objcopy, cache_hit->size + age_len + 1);
+            //write(curr_socket, objcopy, cache_hit->size + age_len + 1);
+            write(curr_socket, cache_hit->object, cache_hit->size);
             return;
         }else {
             printf("Cache hit, but expired or wrong port\n");
@@ -386,7 +393,7 @@ void proxy_http(struct Cache * cache, int curr_socket, char * buffer,
     clientfd = socket(AF_INET, SOCK_STREAM, 0);
     struct timeval tv;
     tv.tv_sec = 0;
-    tv.tv_usec = 300000;
+    tv.tv_usec = 100000;
     setsockopt(clientfd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
     //get hostbyname
     host_name =  strtok(headerHost, " ");
