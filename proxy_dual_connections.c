@@ -72,8 +72,8 @@ void proxy_http(struct Cache * cache, int curr_socket, char * buffer,
                 char * host_name, char * headerGET, char * headerHost, struct Connections * connections, int * fdmax);
 void proxy_https(int curr_socket,char * buffer, int numbytes, int webport, char * host_name, char * headerHost, struct Connections * connections, fd_set * master_set, int * fdmax);
 void forward(struct connection * con, int sender, char * buffer, int numbytes);
-void print_list(struct Node * head);
 void print_connection(struct connection * head);
+void print_cache(struct Cache * cache);
 void remove_connection(struct Connections * connections, int socket);
 struct connection * has_connection(struct Connections * connections, int socket);
 void prepend_connection(int client_sock, int server_sock, struct Connections * connections, bool secure, char * key);
@@ -177,6 +177,7 @@ int main (int argc, char *argv[]) {
     printf("Entering main loop for select\n");
     while(1) {
         temp_set = master_set;
+        printf("Select is run\n");
         select(*fdmax + 1, &temp_set, NULL, NULL, NULL); 
 
         // If main socket is expecting new connection
@@ -195,23 +196,38 @@ int main (int argc, char *argv[]) {
             for(curr_socket = 0; curr_socket <= *fdmax; curr_socket++) {
                 // printf("Current check: %d\n", curr_socket);
                 if(FD_ISSET(curr_socket, &temp_set)) {
+                    print_connection(connections->head);
+                    print_cache(cache);
                     printf("\nSocket %d is set\n",curr_socket);
                     numbytes = recv(curr_socket, buffer, OBJECT_MAX-1, 0);
                     if (numbytes < 0) {
                         printf("Less than 0 read from socket %d\n", curr_socket);
+                        struct connection * con = has_connection(connections, curr_socket);
+                        if(con != NULL) {
+                            printf("Closing %d\n", con->client_sock);
+                            close(con->client_sock);
+                            printf("Closing %d\n", con->server_sock);
+                            close(con->server_sock);
+                            FD_CLR(con->client_sock, &master_set);
+                            FD_CLR(con->server_sock, &master_set);
+                            remove_connection(connections, curr_socket);
+                        }
                     }else if (numbytes == 0) {
                         printf("Client %d has left in orderly conduct\n", curr_socket);
-                        // struct connection * con = has_connection(connections, curr_socket);
-                        // if(con != NULL) {
-                        //     if(!(con->secure) && con->server_sock == curr_socket) {
-                        //         struct Node* in_cache = search_cache(cache, con->key);
-                        //         forward(con, curr_socket, in_cache->object, in_cache->size);
-                        //     }
-                        // }
-                        remove_connection(connections, curr_socket);
-                        close(curr_socket);
-                        FD_CLR(curr_socket, &master_set);
-
+                        struct connection * con = has_connection(connections, curr_socket);
+                        if(con != NULL) {
+                            printf("Closing %d\n", con->client_sock);
+                            close(con->client_sock);
+                            printf("Closing %d\n", con->server_sock);
+                            close(con->server_sock);
+                            FD_CLR(con->client_sock, &master_set);
+                            FD_CLR(con->server_sock, &master_set);
+                            remove_connection(connections, curr_socket);
+                        }else {
+                            printf("Closing %d\n", curr_socket);
+                            close(curr_socket);
+                            FD_CLR(curr_socket, &master_set);
+                        }
                         //remove_client(clients, curr_socket, &master_set);
                     }else{
                         printf("Recieved client message of size %d from socket %d\n", numbytes, curr_socket);
@@ -237,18 +253,8 @@ void client_message(struct Cache * cache, struct Connections * connections,
             struct Node * in_cache = search_cache(cache,con->key);
             if(in_cache != NULL) {
                 add_node_data(in_cache, buffer, numbytes);
-                if(!FD_ISSET(curr_socket, temp_set)) {
-                    forward(con, curr_socket, in_cache->object, in_cache->size);
-                    close(con->server_sock);
-                    close(con->client_sock);
-                    FD_CLR(con->server_sock, master_set);
-                    FD_CLR(con->client_sock, master_set);                    
-                    remove_connection(connections, curr_socket);
+                forward(con, curr_socket, buffer, numbytes);
 
-
-
-
-                }
             }
              printf("return from secure_stream\n");
             return;
@@ -285,8 +291,10 @@ void client_message(struct Cache * cache, struct Connections * connections,
     if(curr_line[0] == 'H' && curr_line[1] == 'o' && curr_line[2] == 's'){
         strcpy(headerHost, curr_line);
     }
+    printf("Currline: %s\n",curr_line);
+
     while((curr_line = strtok(NULL, delim)) != NULL){
-        // printf("Currline: %s\n",curr_line);
+        printf("Currline: %s\n",curr_line);
         if(curr_line[0] == 'G' && curr_line[1] == 'E' && 
             curr_line[2] == 'T'){
             strcpy(headerGET, curr_line);
@@ -319,10 +327,8 @@ void client_message(struct Cache * cache, struct Connections * connections,
     }else if(status == GET){
         proxy_http(cache, curr_socket, buffer, master_set, numbytes, webport,
                      host_name, headerGET, headerHost, connections, fdmax);
-        close(curr_socket);
-        FD_CLR(curr_socket, master_set);
     }else {
-        printf("Message is not a get or connect and does not come from and established connection\n");
+        printf("Message is not a get or connect and does not come from and established connection, closing %d\n", curr_socket);
         close(curr_socket);
         FD_CLR(curr_socket, master_set);
     }
@@ -365,7 +371,7 @@ void proxy_http(struct Cache * cache, int curr_socket, char * buffer,
     struct hostent *server;
     struct sockaddr_in serveraddr;
     time_t rawtime;
-    //Check if already in cache
+    //Check if already in caches
     rawtime = time (NULL);
     int update = 0;
     printf("cache Size: %d\n", cache->num_elements);
@@ -400,7 +406,7 @@ void proxy_http(struct Cache * cache, int curr_socket, char * buffer,
     clientfd = socket(AF_INET, SOCK_STREAM, 0);
     struct timeval tv;
     tv.tv_sec = 0;
-    tv.tv_usec = 100000;
+    tv.tv_usec = 200000;
     setsockopt(clientfd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
     //get hostbyname
     host_name =  strtok(headerHost, " ");
@@ -420,6 +426,7 @@ void proxy_http(struct Cache * cache, int curr_socket, char * buffer,
     server = gethostbyname(tempname);
     if(server == NULL) {
         fprintf(stderr, "ERROR, no such host as %s\n", tempname);
+        printf("Closing %d\n", clientfd);
         close(clientfd);
         exit(0);
     }
@@ -451,10 +458,16 @@ void proxy_http(struct Cache * cache, int curr_socket, char * buffer,
     printf("Read a HTTP server reply of size %d\n", count);
     if(count <= 0) {
         free(bufchunk);
+        printf("Closing %d\n", clientfd);
         close(clientfd);
+        printf("Closing %d\n", curr_socket);
         close(curr_socket);
+        remove_connection(connections, curr_socket);
         return;
     }
+    int n = write(curr_socket, bufchunk, count);
+    printf("Sent first server chunk of size %d to %d\n", count, curr_socket);
+
 
     memcpy(temp->object, bufchunk, count);
     temp->size = count;    
@@ -519,6 +532,8 @@ void proxy_https(int curr_socket,char * buffer, int numbytes, int webport, char 
     server = gethostbyname(tempname);
     if(server == NULL) {
         fprintf(stderr, "ERROR, no such host as %s\n", tempname);
+        printf("Closing %d\n", server_sock);
+
         close(server_sock);
         exit(0);
     }
@@ -557,30 +572,21 @@ void proxy_https(int curr_socket,char * buffer, int numbytes, int webport, char 
 void forward(struct connection * con, int sender, char * buffer, int numbytes){
     int reciever;
     if(con->client_sock == sender) {
+        printf("Server is reciever\n");
         reciever = con->server_sock;
     }else if(con->server_sock == sender){
+        printf("Client is reciever\n");
         reciever = con->client_sock;
     }
 
-    printf("Found existing connection, sending %d msg to %d\n",numbytes,reciever);
-    int n = write(reciever, buffer, numbytes);
+    printf("Sending %d msg to %d\n",numbytes,reciever);
+    int n;
+    if((n = write(reciever, buffer, numbytes)) < 0) {
+        printf("Message write error\n");
+    }
     printf("Sent msg of size %d\n", n);
 }
 
-
-void print_list(struct Node * head) {
-    printf("\nPrinting Cache \n");
-    if(head == NULL) {
-        printf("This specific list is empty\n");
-        return;
-    }
-    struct Node * temp = head;
-    while(temp != NULL) {
-        printf(" -> ");
-        printf("%s", temp->key);
-    }
-    printf("\n");
-}
 
 void print_connection(struct connection * head) {
     printf("\nPrinting connection list\n");
@@ -591,6 +597,7 @@ void print_connection(struct connection * head) {
     struct connection * temp = head;
     while(temp != NULL) {
         printf("Connection between client socket %d and server socket %d, Secure: %d\n", temp->client_sock, temp->server_sock, temp->secure);
+        temp = temp->next;
     }
     printf("\n");
 }
@@ -770,6 +777,7 @@ void remove_stale(struct Cache * cache) {
            while(temp != NULL) {
                if(is_stale(temp)) {
                    struct Node * next = temp->next;
+                   printf("Removing %s from cache\n", temp->key);
                    remove_cache_node(cache, temp);
                    temp = next;
                }else {
@@ -801,4 +809,26 @@ struct Cache * create_cache() {
         cache->table[i] = NULL;
     }
     return cache;
+}
+
+void print_cache(struct Cache * cache) {
+    printf("Printing cache\n");
+
+    if(cache == NULL || cache->table == NULL){
+        return;
+    }
+    struct Node ** table = cache->table;
+    for(int i = 0; i < TABLE_SIZE; i++) {
+        if(table[i] == NULL) {
+            printf("Table index %d is empty\n", i);
+        }else {
+            printf("Table index %d: \n", i);
+            struct Node * temp = table[i];
+            while(temp != NULL) {
+                printf("KEY: %s\n", temp->key);
+                temp = temp->next;
+            }
+        }
+    }
+    printf("\n\n");
 }
