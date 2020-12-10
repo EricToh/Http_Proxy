@@ -4,7 +4,7 @@
  *  etoh01
  *  Comp 112: Networks Final Project
  *
- *  ADVANCED HTTP(S) Proxy
+ *  A Chat Server 
  *
  * 
 */
@@ -73,6 +73,7 @@ struct Connections {
 };
 
 
+
 // FUNCTION DECLARATIONS
 void client_message(struct Cache * cache, struct Connections * connections,
                     int curr_socket, char * buffer, fd_set * master_set, int numbytes, int * fdmax);
@@ -96,7 +97,6 @@ void add_to_size_list(struct Cache * cache, struct Node * node);
 void remove_from_size_list(struct Cache * cache, char * key);
 struct Node_Size * pop_largest(struct Cache * cache);
 struct Cache * create_cache();
-
 
 // SMALL HELPER FUNCTIONS
 void error(const char *msg)
@@ -228,12 +228,10 @@ int main (int argc, char *argv[]) {
     }
 }
 
-
 // Function to deal with the client's message
 void client_message(struct Cache * cache, struct Connections * connections,
                     int curr_socket, char * buffer, fd_set * master_set, int numbytes, int * fdmax){
     // printf("Entered client message\n");
-
     int partner_con = has_connection(connections, curr_socket);
     // printf("server con\n");
     if(partner_con != -1) {
@@ -347,11 +345,11 @@ struct Node * search_cache(struct Cache * cache, char * key) {
     }
 }
 
+
 void proxy_http(struct Cache * cache, int curr_socket, char * buffer,
                 fd_set * master_set, int numbytes, int webport,
                 char * host_name, char * headerGET, char * headerHost) {
     printf("Entered proxy http\n");
-    char *curr_line;
     struct hostent *server;
     struct sockaddr_in serveraddr;
     time_t rawtime;
@@ -365,27 +363,7 @@ void proxy_http(struct Cache * cache, int curr_socket, char * buffer,
         if((cache_hit->age + cache_hit->time) > rawtime &&
         cache_hit->port == webport){
             printf("Normal Cache hit\n");
-            /*char * objcopy = (char *) malloc(10000000);
-            char agestring[100] = "Age: ";
-            char agenumber[95];
-            sprintf(agenumber, "%ld", (rawtime - cache_hit->time));
-            strcat(agestring, agenumber);
-                
-            //finds where to insert the age
-            char *placeholder;
-            placeholder = strchr(cache_hit->object, '\n');
-            int placement_index = placeholder - cache_hit->object;
-            int age_len = strlen(agestring);
-            //Inserts it in
-            printf("Updating age\n");
-            memcpy(objcopy, cache_hit->object, placement_index+1);
-            memcpy(objcopy + placement_index + 1, agestring, age_len);
-            memcpy(objcopy + placement_index + age_len + 1,
-                   cache_hit->object + placement_index, 
-                   cache_hit->size - placement_index); */
-
             chain_front(cache, cache_hit);
-
             printf("Writing stored data\n");
             //write(curr_socket, objcopy, cache_hit->size + age_len + 1);
             write(curr_socket, cache_hit->object, cache_hit->size);
@@ -457,22 +435,67 @@ void proxy_http(struct Cache * cache, int curr_socket, char * buffer,
     
     bzero(buffer, OBJECT_MAX);
     bzero(bigbuf, 10000000);
-    int count;
+    int count , header_size;
+    char * end_head;
+    char content_len [15] = "Content-Length:";
     int contentsize = 0;
-    while((count = recv(clientfd,bufchunk,10000000, 0)) > 0){
+    char delim[] = "\n";
+
+    // Read first chunk
+    count = recv(clientfd, bufchunk, OBJECT_MAX, 0);
+    memcpy(bigbuf + contentsize, bufchunk, count);
+    contentsize += count;
+    printf("Read first chunk of size %d\n", count);
+    // Read until the entire header has been read
+    while((end_head = strstr(bigbuf,"\r\n\r\n")) == NULL) {
+        printf("Portion read so far: %s\n",bigbuf);
+        count = recv(clientfd, bufchunk, OBJECT_MAX, 0);
+        if(count >= 0) {
+            memcpy(bigbuf + contentsize, bufchunk, count);
+            contentsize += count;
+        }
         printf("Read a HTTP server reply of size %d\n", count);
-        memcpy(bigbuf + contentsize, bufchunk, count);
-        contentsize = contentsize + count;
     }
-    printf("Read a HTTP server reply of size %d\n", count);
-    printf("Finished reading from server\n");
+    header_size = end_head - bigbuf + 4;
+    printf("Header Size: %d\n", header_size);
+    //Extract content_size
+    int cont_size = 0;
+    char * search_buf =  (char *) malloc(10000000);
+    memcpy(search_buf,bigbuf,contentsize);
+    char * curr_line = strtok(search_buf, delim);
+    while((curr_line = strtok(NULL, delim)) != NULL){
+        if((memcmp(&curr_line[0],&content_len[0],15)) == 0){
+            char c;
+            int start_i = 16;
+            while((c =curr_line[start_i]) != ' ' && curr_line[start_i] != '\n' && curr_line[start_i] != '\r') {
+                cont_size *= 10;
+                cont_size += (c - 48);
+                start_i++;
+            }
+        }
+    }
+    printf("Extracted content size %d\n", cont_size);
+    int total_bytes =  header_size + cont_size;
+    // Read until all bytes have been read
+    while(contentsize < total_bytes) {
+        count = recv(clientfd, bufchunk, OBJECT_MAX, 0);
+        if(count >= 0) {
+            memcpy(bigbuf + contentsize, bufchunk, count);
+            contentsize += count;
+        }
+        printf("Read a HTTP server reply of size %d, total read so far: %d\n", count, contentsize);
+
+    }
+    printf("Read a HTTP server reply of size %d\n", contentsize);
+    printf("According to header it was supposed to be size %d\n", total_bytes);
 
     close(clientfd);
-    // if(count == -1) {
-    //     write(curr_socket, bigbuf, contentsize);
-    //     free(temp);
-    //     return;
-    // }
+
+    //Send reply to Client
+    int n = write(curr_socket, bigbuf, contentsize);
+    printf("Write of size %d to client\n", n);
+
+
     temp->object = malloc(sizeof(char) *contentsize);
     memcpy(temp->object, bigbuf, contentsize);
     temp->size = contentsize;
@@ -517,11 +540,10 @@ void proxy_http(struct Cache * cache, int curr_socket, char * buffer,
     prepend_cache_node(cache,temp);
     add_to_size_list(cache, temp);
 
-    //Send reply to Client
-    write(curr_socket, bigbuf, contentsize);
     free(bigbuf);
     free(bufchunk);
     free (timebuf);
+    free(search_buf);
 }
 
 void proxy_https(int curr_socket,char * buffer, int numbytes, int webport, char * host_name, char * headerHost, struct Connections * connections, fd_set * master_set, int * fdmax){
