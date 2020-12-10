@@ -115,7 +115,8 @@ bool add_msg_buf(struct connection * con, char * buffer, int numbytes) {
         char content_len [15] = "Content-Length:";
         char delim[] = "\n";
 
-        if((end_head = strstr(con->buffer,"\r\n\r\n")) != NULL) {
+        if((end_head = strstr(con->buffer,"\r\n\r\n")) != NULL || 
+                (end_head = strstr(con->buffer,"\n\n")) != NULL) {
             int header_size = end_head - con->buffer + 4;
             printf("Header Size: %d\n", header_size);
             //Extract content_size
@@ -136,9 +137,7 @@ bool add_msg_buf(struct connection * con, char * buffer, int numbytes) {
                     }
                 }
             }
-            if(cont_size != 0 && header_size != numbytes) {
-                con->final_size =  header_size + cont_size;
-            }
+            con->final_size =  header_size + cont_size;
             free(search_buf);
         }
     }else {
@@ -149,7 +148,8 @@ bool add_msg_buf(struct connection * con, char * buffer, int numbytes) {
             char * end_head;
             char content_len [15] = "Content-Length:";
             char delim[] = "\n";
-            if((end_head = strstr(con->buffer,"\r\n\r\n")) != NULL) {
+            if((end_head = strstr(con->buffer,"\r\n\r\n")) != NULL || 
+                (end_head = strstr(con->buffer,"\n\n")) != NULL) {
                 int header_size = end_head - con->buffer + 4;
                 printf("Header Size: %d\n", header_size);
                 //Extract content_size
@@ -177,8 +177,8 @@ bool add_msg_buf(struct connection * con, char * buffer, int numbytes) {
         }
     }
     printf("Adding %d bytes to msg buf client %d\n", numbytes, con->client_sock);
-    printf("Total so far: %d/%d", con->buf_size, con->final_size);
-    if(con->buf_size == con->final_size) {
+    printf("Total so far: %d/%d\n", con->buf_size, con->final_size);
+    if(con->buf_size >= con->final_size) {
         printf("Finished loading buffer of size %d\n", con->buf_size);
         return true;
     }else return false;
@@ -327,6 +327,17 @@ int main (int argc, char *argv[]) {
                     numbytes = recv(curr_socket, buffer, OBJECT_MAX-1, 0);
                     if (numbytes < 0) {
                         printf("Less than 0 read from socket %d\n", curr_socket);
+                        struct connection * con = has_connection(connections, curr_socket);
+                        if(con != NULL) {
+                            remove_connection(connections, con->client_sock, con->server_sock);
+                            close(con->client_sock);
+                            close(con->server_sock);
+                            FD_CLR(con->client_sock,&master_set);
+                            FD_CLR(con->server_sock,&master_set);
+                        }else {
+                            close(curr_socket);
+                            FD_CLR(curr_socket, &master_set);
+                        }
                     }else if (numbytes == 0) {
                         printf("Client %d has left in orderly conduct\n", curr_socket);
                         struct connection * con = has_connection(connections, curr_socket);
@@ -554,6 +565,8 @@ void proxy_http(struct Cache * cache, int curr_socket, char * buffer,
             printf("Writing stored data\n");
             //write(curr_socket, objcopy, cache_hit->size + age_len + 1);
             write(curr_socket, cache_hit->object, cache_hit->size);
+            close(curr_socket);
+            FD_CLR(curr_socket, master_set);
             return;
         }else {
             printf("Cache hit, but expired or wrong port\n");
