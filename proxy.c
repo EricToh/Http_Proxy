@@ -1,12 +1,11 @@
 /*
  *  proxy.c
- *  By Eric Toh and Collin Geary, 12/1/2020
- *  etoh01
+ *  By Eric Toh and Collin Geary, 12/18/2020
+ *  etoh01 & cgeary02
  *  Comp 112: Networks Final Project
  *
- *  A Chat Server 
+ *  Web Proxy 
  *
- *  
 */
 
 #include <stdio.h>
@@ -28,7 +27,10 @@ const int GET = 1;
 const int CON = 2;
 const int TABLE_SIZE = 30;
 const int TABLE_MAX_BYTES = 2000000;
-const int BPS = 750000;
+const int BPS = 750000; //Bytes per Second
+const int BLOCKED_SIZE = 10000;
+const int BLOCKED_MAX = 100000;
+
 
 //STRUCTURES
 
@@ -84,11 +86,24 @@ struct Connections {
     int num_connections;
 };
 
+struct blockedTable{
+    int num_elements;
+    int capacity;
+    struct blockedNode ** table;
+};
+
+struct blockedNode{
+    char host[1000];
+    struct blockedNode* next;
+    struct blockedNode*prev;
+};
+
 
 
 // FUNCTION DECLARATIONS
 void client_message(struct Cache * cache, struct Connections * connections,
-                    int curr_socket, char * buffer, fd_set * master_set, int numbytes, int * fdmax);
+                    int curr_socket, char * buffer, fd_set * master_set, int numbytes, int * fdmax,
+                    struct blockedTable * blockList);
 void proxy_http(struct Cache * cache, int curr_socket, char * buffer,
                 fd_set * master_set,  int numbytes, int webport,
                 char * host_name, char * headerGET, char * headerHost,
@@ -120,6 +135,12 @@ void add_to_size_list(struct Cache * cache, struct Node * node);
 void remove_from_size_list(struct Cache * cache, char * key);
 struct Node_Size * pop_largest(struct Cache * cache);
 struct Cache * create_cache();
+
+//Content Filter functions
+void prepend_blocked_node(struct blockedTable * blockList, struct blockedNode * node);
+struct blockedTable * create_blockList();
+int search_blockList(struct blockedTable * blockList, char * host);
+int search_blockedChain(struct blockedNode * head, char * host);
 
 // SMALL HELPER FUNCTIONS
 void error(const char *msg)
@@ -166,9 +187,35 @@ int main (int argc, char *argv[]) {
     struct Connections * connections = malloc(sizeof(struct Connections));
     connections->head = NULL;
     connections->num_connections = 0;
+    //Head of block list
+    struct blockedTable * blockList = create_blockList();
+    if(argc == 3){
+        //struct blockedTable * blockList = create_blockList();
+        FILE *ptr;
+        ptr = fopen(argv[2], "rb");
+        int i = 0;
+        while(1 == fread(buffer+i,1,1,ptr)){
+            i++;
+        }
+        buffer[i] = '\0';
+        char delim[] = "\n";
+        char *curr_line = NULL;
+        curr_line = strtok(buffer,delim);
+        struct blockedNode * temp = (struct blockedNode*)malloc(sizeof(struct blockedNode));
+        strcpy(temp->host, curr_line);
+        prepend_blocked_node(blockList, temp);
+        while((curr_line = strtok(NULL, delim)) != NULL){
+            struct blockedNode * temp = (struct blockedNode*)malloc(sizeof(struct blockedNode));
+            strcpy(temp->host, curr_line);
+            prepend_blocked_node(blockList, temp);
+        }
+    }else{
+        blockList = NULL;
+    }
+
 
     // Get port number to bind to
-    if (argc != 2) {
+    if (argc != 3 && argc != 2) {
         fprintf(stderr, "Wrong number of arguments\n");
         exit(EXIT_FAILURE);
     }
@@ -292,7 +339,7 @@ int main (int argc, char *argv[]) {
                         }
                     }else{
                         // printf("Recieved client message of size %d from socket %d\n", numbytes, curr_socket);
-                        client_message(cache, connections, curr_socket, buffer, &master_set, numbytes, fdmax);
+                        client_message(cache, connections, curr_socket, buffer, &master_set, numbytes, fdmax, blockList);
                         // printf("Return from client message\n");
                     }
                 }
@@ -303,7 +350,8 @@ int main (int argc, char *argv[]) {
 
 // Function to deal with the client's message
 void client_message(struct Cache * cache, struct Connections * connections,
-                    int curr_socket, char * buffer, fd_set * master_set, int numbytes, int * fdmax){
+                    int curr_socket, char * buffer, fd_set * master_set, int numbytes, int * fdmax,
+                    struct blockedTable * blockList){
     // printf("Entered client message\n");
     struct connection * con = has_connection(connections, curr_socket);
     // printf("server con\n");
@@ -400,6 +448,7 @@ void client_message(struct Cache * cache, struct Connections * connections,
     curr_line = strtok(newbuffer,delim);
         
     int status = 0;
+    int host_status = 0;
     // printf("If statement\n");
     if(curr_line[0] == 'G'&& curr_line[1] == 'E' && curr_line[2] == 'T'){
         // printf("curr_line: %s\n", curr_line);
@@ -413,6 +462,7 @@ void client_message(struct Cache * cache, struct Connections * connections,
     }
     if(curr_line[0] == 'H' && curr_line[1] == 'o' && curr_line[2] == 's'){
         // printf("HOST\n");
+        host_status = 1;
         strcpy(headerHost, curr_line);
     }
     while((curr_line = strtok(NULL, delim)) != NULL){
@@ -429,15 +479,68 @@ void client_message(struct Cache * cache, struct Connections * connections,
         }
         if(curr_line[0] == 'H' && curr_line[1] == 'o' && 
             curr_line[2] == 's'){
+                host_status = 1;
             strcpy(headerHost, curr_line);
         }
     }
 
-    // printf("Copying over host\n");
+    //printf("Copying over host\n");
+    //strcpy(cpyhost, headerHost);
+    //host_name = strtok(cpyhost, ":");
+    //host_name = strtok(NULL, ":");
+    //host_name = strtok(NULL, ":");
+
+    if(host_status == 1){
+        strcpy(cpyhost, headerHost);
+        host_name = strtok(cpyhost, ":");
+        host_name = strtok(NULL, ":");
+        host_name = strtok(NULL, ":");
+        if(host_name != NULL){
+            webport = atoi(host_name);
+        }else{
+            webport = 80;
+        }
+
+        bzero(cpyhost, 100);
+        strcpy(cpyhost, headerHost);
+        host_name =  strtok(cpyhost, " ");
+        host_name = strtok(NULL, " ");
+        char tempname[100];
+        int i = 0;
+        while(host_name[i] != '\0' && host_name[i] != '\n' 
+              && host_name[i] != ':'){
+            tempname[i] = host_name[i];
+            i++;
+        }
+        if(host_name[i] == ':'){
+            tempname[i] = '\0';
+        }else{
+            tempname[i-1] = '\0';
+        }
+
+        printf("host_name: %s\n", tempname);
+        if(search_blockList(blockList, tempname) == 1){
+            //FILE *html_file;    
+            //html_file = fopen("file.html", "r");
+
+            //char file_data[1024];
+            //fgets(file_data, 1024, html_file);
+
+            //char http_header[2048] = "HTTP/1.1 200 OK\r\nCache-Control: max-age=30\r\n\r\n";
+            //char http_header[2048] = "HTTP/1.1 400 Not Found\r\nDate: Sun, 18 Oct 2012 10:36:20 GMT\r\nServer: Apache/2.2.14 (Win32)\r\nContent-Length: 230\r\nConnection: Closed\r\nContent-Type: text/html; charset=iso-8859-1\r\n\r\n";
+            //strcat(http_header, file_data);
+            close(curr_socket);
+            FD_CLR(curr_socket, master_set);
+            return;
+        }
+    }
+
+    printf("Copying over host\n");
     strcpy(cpyhost, headerHost);
     host_name = strtok(cpyhost, ":");
     host_name = strtok(NULL, ":");
     host_name = strtok(NULL, ":");
+    
     if(host_name != NULL){
         webport = atoi(host_name);
     }else{
@@ -551,7 +654,8 @@ void proxy_http(struct Cache * cache, int curr_socket, char * buffer,
     if(server == NULL) {
         fprintf(stderr, "ERROR, no such host as %s\n", tempname);
         close(clientfd);
-        exit(0);
+        return;
+        //exit(0);
     }
   
     bzero((char *) &serveraddr, sizeof(serveraddr));
@@ -611,7 +715,8 @@ void proxy_https(int curr_socket,char * buffer, int numbytes, int webport, char 
     if(server == NULL) {
         fprintf(stderr, "ERROR, no such host as %s\n", tempname);
         close(server_sock);
-        exit(0);
+        return;
+        //exit(0);
     }
 
     bzero((char *) &serveraddr, sizeof(serveraddr));
@@ -1085,4 +1190,72 @@ int rate_limit(struct connection * con, int socket) {
         }
     }
     return BPS;
+}
+
+// Creates block list data structure
+struct blockedTable * create_blockList() {
+    struct blockedTable * blockList = malloc(sizeof(struct blockedTable));
+    blockList->num_elements = 0;
+    blockList->capacity = BLOCKED_MAX;
+    blockList->table = malloc(BLOCKED_SIZE * sizeof(struct blockedNode *));
+    for(int i = 0; i < BLOCKED_SIZE; i++) {
+        blockList->table[i] = NULL;
+    }
+    return blockList;
+}
+
+// Prepends a blockednode in its correct cache slot
+void prepend_blocked_node(struct blockedTable * blockList, struct blockedNode * node) {
+    printf("Attempting to prepend blocked node\n");
+    if(blockList == NULL || blockList->table == NULL || node == NULL) {
+        return;
+    }
+    int hash_val = (int)(hash(node->host)%BLOCKED_SIZE);
+    struct blockedNode * temp = blockList->table[hash_val];
+    if(temp == NULL) {
+        blockList->table[hash_val] = node;
+        node->prev = NULL;
+        node->next = NULL;
+        printf("Successfully prepended blockednode, first node in this chain\n");
+        blockList->num_elements += 1;
+        return;
+    }
+    blockList->table[hash_val] = node;
+    temp->prev = node;
+    node->next = temp;
+    node->prev = NULL;
+    blockList->num_elements += 1;
+    printf("Successfully prepended blockednode\n");
+}
+
+int search_blockList(struct blockedTable * blockList, char * host) {
+    if(blockList == NULL){
+        return 0;
+    }
+    printf("Searching blockList for headerHost: %s\n", host);
+    int hash_val = (int)(hash(host)%BLOCKED_SIZE);
+    printf("Searching chain index %d\n", hash_val);
+    int found = search_blockedChain(blockList->table[hash_val], host);
+    if(found == 1) {
+        return 1;
+    }else {
+        return 0;
+    }
+}
+
+int search_blockedChain(struct blockedNode * head, char * host) {
+    if(head == NULL) {
+        printf("Chain is empty\n");
+        return 0;
+    }
+    struct blockedNode * temp = head;
+    while(temp != NULL) {
+        printf("Object host: %s\n", temp->host);
+        if(strcmp(host, temp->host) == 0) {
+            printf("Found in chain\n");
+            return 1;
+        }
+        temp = temp->next;
+    }
+    return 0;
 }
