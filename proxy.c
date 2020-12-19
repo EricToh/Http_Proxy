@@ -221,7 +221,6 @@ int main (int argc, char *argv[]) {
     }
     server_port = atoi(argv[1]);
 
-    printf("Creating socket\n");
     // Create Main Socket using socket()
     master_sock = socket(AF_INET,SOCK_STREAM, 0);
     if (master_sock < 0) {
@@ -238,7 +237,6 @@ int main (int argc, char *argv[]) {
     server_address.sin_port = htons(server_port);
 
     //Bind Socket to our port
-    printf("Binding socket\n");
     if (bind(master_sock, (struct sockaddr *) &server_address, sizeof(server_address)) < 0) {
         error("Error on binding");
     }
@@ -261,58 +259,40 @@ int main (int argc, char *argv[]) {
     *fdmax = master_sock;
 
     //Main Loop for select and accepting clients
-    // printf("Entering main loop for select\n");
     while(1) {
         temp_set = master_set;
-        // printf("select\n");
         select(*fdmax + 1, &temp_set, NULL, NULL, NULL); 
 
         // If main socket is expecting new connection
         if(FD_ISSET(master_sock, &temp_set)) {
-            // printf("\nNew socket connection from client on socket");
             clilen = (size_t)sizeof(client_address);
             client_sock = accept(master_sock, (struct sockaddr *) &client_address, &clilen);
             if (client_sock < 0) {
                 error ("accept");
             }
-            // printf("%d\n\n", client_sock);
             FD_SET(client_sock, &master_set);
             *fdmax = max(client_sock,*fdmax);
         } else {
 
             for(curr_socket = 0; curr_socket <= *fdmax; curr_socket++) {
-                // printf("Current check: %d\n", curr_socket);
                 if(FD_ISSET(curr_socket, &temp_set)) {
-                    // print_connection(connections->head);
-                    // print_cache(cache);
-                    // printf("\nCurrent number of connections: %d\n", connections->num_connections);
-                    // printf("Current cache: %d elements, %d bytes\n\n",cache->num_elements, cache->num_bytes);
-                    // printf("\nSocket %d is set\n",curr_socket);
-
                     //Rate Limit
                     struct connection * con = has_connection(connections, curr_socket);
                     int tokens = rate_limit(con, curr_socket);
 
                     if(tokens == 0) {
-                        // printf("Socket %d used quota\n", curr_socket);
                         continue;
-                    }else {
-                        // printf("Tokens remaining for socket %d: %d\n", curr_socket, tokens);
                     }
                     
-
                     numbytes = recv(curr_socket, buffer, tokens, 0);
                     if(con != NULL) {
                         if(con->client_sock == curr_socket) {
                             con->client_bucket.tokens -= numbytes;
-                            // printf("Socket %d Read %d, Remaining tokens: %d\n", curr_socket, numbytes, con->client_bucket.tokens);
                         }else {
                             con->server_bucket.tokens -= numbytes;
-                            // printf("Socket %d Read %d, Remaining tokens: %d\n", curr_socket, numbytes, con->server_bucket.tokens);
                         }
                     }
                     if (numbytes < 0) {
-                        // printf("Less than 0 read from socket %d\n", curr_socket);
                         struct connection * con = has_connection(connections, curr_socket);
                         if(con != NULL) {
                             remove_connection(connections, con->client_sock, con->server_sock);
@@ -325,7 +305,6 @@ int main (int argc, char *argv[]) {
                             FD_CLR(curr_socket, &master_set);
                         }
                     }else if (numbytes == 0) {
-                        // printf("Client %d has left in orderly conduct\n", curr_socket);
                         struct connection * con = has_connection(connections, curr_socket);
                         if(con != NULL) {
                             remove_connection(connections, con->client_sock, con->server_sock);
@@ -338,9 +317,7 @@ int main (int argc, char *argv[]) {
                             FD_CLR(curr_socket, &master_set); 
                         }
                     }else{
-                        // printf("Recieved client message of size %d from socket %d\n", numbytes, curr_socket);
                         client_message(cache, connections, curr_socket, buffer, &master_set, numbytes, fdmax, blockList);
-                        // printf("Return from client message\n");
                     }
                 }
             }
@@ -352,9 +329,7 @@ int main (int argc, char *argv[]) {
 void client_message(struct Cache * cache, struct Connections * connections,
                     int curr_socket, char * buffer, fd_set * master_set, int numbytes, int * fdmax,
                     struct blockedTable * blockList){
-    // printf("Entered client message\n");
     struct connection * con = has_connection(connections, curr_socket);
-    // printf("server con\n");
     if(con != NULL) {
         int partner_con;
         if(con->client_sock == curr_socket){
@@ -376,7 +351,6 @@ void client_message(struct Cache * cache, struct Connections * connections,
                 temp->object = malloc(sizeof(char) * con->buf_size);
                 memcpy(temp->object, con->buffer, con->buf_size);
                 //Add time and age to new object
-                // printf("Set cache time\n");
                 temp->time = rawtime;
                 char *timebuf = malloc(10000000 * sizeof(char));
                 strcpy(timebuf, temp->object);
@@ -391,13 +365,10 @@ void client_message(struct Cache * cache, struct Connections * connections,
                     temp->age = atoi(curr_line);
                 }
                 //Add node to cache
-                // printf("Adding to cache\n");
                 if(cache->num_bytes > ((double)cache->capacity)/2){
-                    // printf("Removing stale\n");
                     remove_stale(cache);
                 }
                 if(temp->size > cache->capacity) {
-                    // printf("Larger than cache capacity \n");
                     write(partner_con, con->buffer, con->buf_size);
                     free (timebuf);
                     free(temp->object);
@@ -405,16 +376,13 @@ void client_message(struct Cache * cache, struct Connections * connections,
                     return;
                 }
                 while((cache->num_bytes + temp->size) > cache->capacity){
-                    // printf("Adding this object would exceed MAX BYTES, removing largest\n");
                     struct Node_Size * remove = pop_largest(cache);
                     remove_cache_node(cache, remove->node);
                     free(remove);
-                    // printf("New Cache Size: %d\n", cache->num_bytes);
                 }
                 prepend_cache_node(cache,temp);
                 add_to_size_list(cache, temp);
                 int n = write(partner_con, con->buffer, con->buf_size);
-                // printf("Wrote %d bytes to client %d\n", con->buf_size, partner_con);
                 remove_connection(connections, con->client_sock,con->server_sock);
                 close(con->client_sock);
                 close(con->server_sock);
@@ -427,7 +395,6 @@ void client_message(struct Cache * cache, struct Connections * connections,
         }else{ 
             //HTTPS Forward
             secure_stream(curr_socket, partner_con, buffer, numbytes);
-            // printf("return from secure_stream\n");
             return;
         }
     }
@@ -442,31 +409,25 @@ void client_message(struct Cache * cache, struct Connections * connections,
     char * newbuffer = malloc(sizeof(char) * OBJECT_MAX);
      
     //Find the GET field and the Host field and separate them
-    // printf("Finding Get field and Host field\n");
     bzero(newbuffer, OBJECT_MAX);
     memcpy(newbuffer, buffer, numbytes);
     curr_line = strtok(newbuffer,delim);
         
     int status = 0;
     int host_status = 0;
-    // printf("If statement\n");
     if(curr_line[0] == 'G'&& curr_line[1] == 'E' && curr_line[2] == 'T'){
-        // printf("curr_line: %s\n", curr_line);
         strcpy(headerGET, curr_line);
         status = GET;
     }
     if(curr_line[0] == 'C'&& curr_line[1] == 'O' && curr_line[2] == 'N'){
-        // printf("CON\n");
         strcpy(headerGET, curr_line);
         status = CON;
     }
     if(curr_line[0] == 'H' && curr_line[1] == 'o' && curr_line[2] == 's'){
-        // printf("HOST\n");
         host_status = 1;
         strcpy(headerHost, curr_line);
     }
     while((curr_line = strtok(NULL, delim)) != NULL){
-        // printf("Currline: %s\n",curr_line);
         if(curr_line[0] == 'G' && curr_line[1] == 'E' && 
             curr_line[2] == 'T'){
             strcpy(headerGET, curr_line);
@@ -483,12 +444,6 @@ void client_message(struct Cache * cache, struct Connections * connections,
             strcpy(headerHost, curr_line);
         }
     }
-
-    //printf("Copying over host\n");
-    //strcpy(cpyhost, headerHost);
-    //host_name = strtok(cpyhost, ":");
-    //host_name = strtok(NULL, ":");
-    //host_name = strtok(NULL, ":");
 
     if(host_status == 1){
         strcpy(cpyhost, headerHost);
@@ -518,24 +473,13 @@ void client_message(struct Cache * cache, struct Connections * connections,
             tempname[i-1] = '\0';
         }
 
-        printf("host_name: %s\n", tempname);
         if(search_blockList(blockList, tempname) == 1){
-            //FILE *html_file;    
-            //html_file = fopen("file.html", "r");
-
-            //char file_data[1024];
-            //fgets(file_data, 1024, html_file);
-
-            //char http_header[2048] = "HTTP/1.1 200 OK\r\nCache-Control: max-age=30\r\n\r\n";
-            //char http_header[2048] = "HTTP/1.1 400 Not Found\r\nDate: Sun, 18 Oct 2012 10:36:20 GMT\r\nServer: Apache/2.2.14 (Win32)\r\nContent-Length: 230\r\nConnection: Closed\r\nContent-Type: text/html; charset=iso-8859-1\r\n\r\n";
-            //strcat(http_header, file_data);
             close(curr_socket);
             FD_CLR(curr_socket, master_set);
             return;
         }
     }
 
-    printf("Copying over host\n");
     strcpy(cpyhost, headerHost);
     host_name = strtok(cpyhost, ":");
     host_name = strtok(NULL, ":");
@@ -553,7 +497,6 @@ void client_message(struct Cache * cache, struct Connections * connections,
         proxy_http(cache, curr_socket, buffer, master_set, numbytes, webport,
                      host_name, headerGET, headerHost, fdmax, connections);
     }else {
-        printf("Message is not a get or connect and does not come from and established connection\n");
         close(curr_socket);
         FD_CLR(curr_socket, master_set);
     }
@@ -561,14 +504,11 @@ void client_message(struct Cache * cache, struct Connections * connections,
 
 struct Node * search_chain(struct Node * head, char * key) {
     if(head == NULL) {
-        // printf("Chain is empty\n");
         return NULL;
     }
     struct Node * temp = head;
     while(temp != NULL) {
-        // printf("Object key: %s\n", temp->key);
         if(strcmp(key, temp->key) == 0) {
-            // printf("Found in chain\n");
             return temp;
         }
         temp = temp->next;
@@ -577,9 +517,7 @@ struct Node * search_chain(struct Node * head, char * key) {
 }
 
 struct Node * search_cache(struct Cache * cache, char * key) {
-    // printf("Searching cache for headerGet: %s\n", key);
     int hash_val = (int)(hash(key)%TABLE_SIZE);
-    // printf("Searching chain index %d\n", hash_val);
     struct Node * object = search_chain(cache->table[hash_val], key);
     if(object == NULL) {
         return NULL;
@@ -593,40 +531,30 @@ void proxy_http(struct Cache * cache, int curr_socket, char * buffer,
                 fd_set * master_set, int numbytes, int webport,
                 char * host_name, char * headerGET, char * headerHost, 
                 int * fdmax, struct Connections * connections) {
-    // printf("Entered proxy http\n");
     struct hostent *server;
     struct sockaddr_in serveraddr;
     time_t rawtime;
     //Check if already in cache
     rawtime = time (NULL);
     int update = 0;
-    // printf("cache Size: %d\n", cache->num_elements);
     struct Node * cache_hit = search_cache(cache, headerGET);
     if(cache_hit != NULL) {
         // Checks if it is correct port and if it has expired
         if((cache_hit->age + cache_hit->time) > rawtime &&
         cache_hit->port == webport){
-            // printf("Normal Cache hit\n");
             chain_front(cache, cache_hit);
-            // printf("Writing stored data\n");
-            //write(curr_socket, objcopy, cache_hit->size + age_len + 1);
             write(curr_socket, cache_hit->object, cache_hit->size);
             close(curr_socket);
             FD_CLR(curr_socket, master_set);
             return;
         }else {
-            // printf("Cache hit, but expired or wrong port\n");
-            // Remove expired object?
+            // Remove expired object
             if((cache_hit->age + cache_hit->time) <= rawtime) {
-                // printf("Removing expired object");
                 remove_from_size_list(cache, cache_hit->key);
                 remove_cache_node(cache, cache_hit);
             }
         }
     }
-    // printf("No cache hit\n");
-    // printf("Creating new cache object\n");
-
 
     //Create socket for web server
     int clientfd;
@@ -655,7 +583,6 @@ void proxy_http(struct Cache * cache, int curr_socket, char * buffer,
         fprintf(stderr, "ERROR, no such host as %s\n", tempname);
         close(clientfd);
         return;
-        //exit(0);
     }
   
     bzero((char *) &serveraddr, sizeof(serveraddr));
@@ -682,8 +609,8 @@ void proxy_http(struct Cache * cache, int curr_socket, char * buffer,
  
 }
 
-void proxy_https(int curr_socket,char * buffer, int numbytes, int webport, char * host_name, char * headerHost, struct Connections * connections, fd_set * master_set, int * fdmax){
-    // printf("HTTPS\n");
+void proxy_https(int curr_socket,char * buffer, int numbytes, int webport, char * host_name, 
+                 char * headerHost, struct Connections * connections, fd_set * master_set, int * fdmax){
     int server_sock;
     struct hostent *server;
     struct sockaddr_in serveraddr;
@@ -716,7 +643,6 @@ void proxy_https(int curr_socket,char * buffer, int numbytes, int webport, char 
         fprintf(stderr, "ERROR, no such host as %s\n", tempname);
         close(server_sock);
         return;
-        //exit(0);
     }
 
     bzero((char *) &serveraddr, sizeof(serveraddr));
@@ -731,19 +657,9 @@ void proxy_https(int curr_socket,char * buffer, int numbytes, int webport, char 
         fprintf(stderr, "ERROR connecting");
     }
 
-    //Forward Client request to Webserver
-    // printf("Client Request: \n");
-    // printf("%s\n", buffer);
-    //write(server_sock, buffer, strlen(buffer));
-
     // Creating connection success message
     char bigbuf[100] = "HTTP/1.1 200 Connection established\r\n\r\n\0";
-    // printf("Server Response: \n");
-    // printf("-------CONNECTION ESTABLISHED--------\nClient Socket: %d\nServer socket: %d\n------------------------------\n",curr_socket,server_sock);
-
-    // printf("Sending %s to %d\n", bigbuf, curr_socket);
     int n = write(curr_socket, bigbuf, strlen(bigbuf));
-    // printf("Sent msg of size %d\n", n);
 
     struct connection * new_con = new_connection(curr_socket, server_sock, true);
 
@@ -755,43 +671,33 @@ void proxy_https(int curr_socket,char * buffer, int numbytes, int webport, char 
 
 void secure_stream(int socket, int socket_partner, char * buffer, int numbytes){
     int n = write(socket_partner, buffer, numbytes);
-    // printf("Sent msg of size %d to %d\n", n, socket_partner);
 }
 
 
 void print_connection(struct connection * head) {
-    printf("\nPrinting connection list\n");
     if(head == NULL) {
-        printf("This specific list is empty\n");
         return;
     }
     struct connection * temp = head;
     while(temp != NULL) {
-        printf("Secure?: %d, Connection between client socket %d and server socket %d\n", temp->secure, temp->client_sock, temp->server_sock);
         temp = temp->next;
     }
-    printf("\n");
 }
 
 
 struct connection * has_connection(struct Connections * connections, int socket){
-    // printf("Searching for existing connection, Socket: %d\n", socket);
     struct connection * head = connections->head;
     if(head == NULL) {
-        // printf("Connections is empty\n");
         return NULL;
     }
     struct connection * temp = head;
     while(temp != NULL) {
         int client_sock = temp->client_sock;
         int server_sock = temp->server_sock;
-        // printf("Client: %d, Server: %d\n",client_sock, server_sock);
         if(client_sock == socket) {
-            // printf("Connection found, is a client\n");
             prepend_connection(remove_connection(connections, client_sock, server_sock), connections);
             return temp;
         }else if (server_sock == socket) {
-            // printf("Connection found, is a server\n");
             prepend_connection(remove_connection(connections, client_sock, server_sock), connections);
             return temp;
         }
@@ -805,7 +711,6 @@ int client_sock, int server_sock){
     if(connections == NULL) {
         return NULL;
     }
-    // printf("Removing connection of client %d, server %d\n", client_sock, server_sock);
     if(connections->head == NULL) {
         return NULL;
     }
@@ -831,12 +736,9 @@ int client_sock, int server_sock){
 
 void prepend_connection(struct connection * con, struct Connections * connections) {
     if(con == NULL || connections == NULL) {
-        // printf("You can't prepend Nothing\n");
         return;
     }
-    // printf("Prepending connection of client %d, server %d\n", con->client_sock, con->server_sock);
     if(connections->head == NULL) {
-        // printf("Successful prepend on empty list\n");
         connections->head = con;
         con->next = NULL;
         con->prev = NULL;
@@ -849,7 +751,6 @@ void prepend_connection(struct connection * con, struct Connections * connection
     con->prev = NULL;
     connections->head = con;
     connections->num_connections += 1;
-    // printf("Successful prepend\n");
 }
 
 
@@ -874,9 +775,7 @@ void remove_cache_node(struct Cache * cache, struct Node * node) {
 }
 
 // Prepends a cache node in its correct cache slot
-
 void prepend_cache_node(struct Cache * cache, struct Node * node) {
-    // printf("Attempting to prepend cache node\n");
     if(cache == NULL || cache->table == NULL || node == NULL) {
         return;
     }
@@ -886,7 +785,6 @@ void prepend_cache_node(struct Cache * cache, struct Node * node) {
         cache->table[hash_val] = node;
         node->prev = NULL;
         node->next = NULL;
-        // printf("Successfully prepended node, first node in this chain\n");
         cache->num_bytes += node->size;
         cache->num_elements += 1;
         return;
@@ -897,19 +795,16 @@ void prepend_cache_node(struct Cache * cache, struct Node * node) {
     node->prev = NULL;
     cache->num_elements += 1;
     cache->num_bytes += node->size;
-    // printf("Successfully prepended node\n");
 }
 
 // Moves a cache node to the front of its chain
 void chain_front(struct Cache * cache, struct Node * node) {
-    // printf("Moving node to front of chain\n");
     if(cache == NULL || cache->table == NULL || node == NULL) {
         return;
     }
     int hash_val = (int)(hash(node->key)%TABLE_SIZE);
     struct Node * temp = cache->table[hash_val];
     if(temp == node) {
-        // printf("Node already at front\n");
         return;
     }
     struct Node * prev = node->prev;
@@ -922,12 +817,10 @@ void chain_front(struct Cache * cache, struct Node * node) {
     cache->table[hash_val] = node;
     node->next = temp;
     temp->prev = node;
-    // printf("Node position updated\n");
 }
 
 // Removes all stale objects in the cache
 void remove_stale(struct Cache * cache) {
-    // printf("Removing stale elements\n");
     if(cache == NULL || cache->table == NULL){
         return;
     }
@@ -976,7 +869,6 @@ struct Cache * create_cache() {
 
 void print_cache(struct Cache * cache) {
     printf("Printing cache of %d elements. Total size: %d\n", cache->num_elements, cache->num_bytes);
-
     if(cache == NULL || cache->table == NULL){
         return;
     }
@@ -1000,7 +892,6 @@ void add_to_size_list(struct Cache * cache, struct Node * node) {
     if(cache == NULL || node == NULL) {
         return;
     }
-    // printf("Adding %s to size list\n", node->key);
 
     struct Node_Size * new = malloc(sizeof(struct Node_Size));
     strcpy(new->key, node->key);
@@ -1009,7 +900,6 @@ void add_to_size_list(struct Cache * cache, struct Node * node) {
     new->node = node;
 
     if(cache->largest == NULL) {
-        // printf("First element in size list\n");
         cache->largest = new;
         new->prev = NULL;
         new->next = NULL;
@@ -1079,14 +969,12 @@ bool add_msg_buf(struct connection * con, char * buffer, int numbytes) {
         if((end_head = strstr(con->buffer,"\r\n\r\n")) != NULL || 
                 (end_head = strstr(con->buffer,"\n\n")) != NULL) {
             int header_size = end_head - con->buffer + 4;
-            // printf("Header Size: %d\n", header_size);
             //Extract content_size
             int cont_size = 0;
             char * search_buf =  (char *) malloc(10000000);
             memcpy(search_buf,con->buffer,con->buf_size);
             char * curr_line = strtok(search_buf, delim);
             while((curr_line = strtok(NULL, delim)) != NULL){
-                // printf("Search currline: %s\n", curr_line);
                 if((memcmp(&curr_line[0],&content_len[0],15)) == 0){
                     char c;
                     int start_i = 16;
@@ -1094,7 +982,6 @@ bool add_msg_buf(struct connection * con, char * buffer, int numbytes) {
                         cont_size *= 10;
                         cont_size += (c - 48);
                         start_i++;
-                        // printf("%d\n", cont_size);
                     }
                 }
             }
@@ -1112,14 +999,12 @@ bool add_msg_buf(struct connection * con, char * buffer, int numbytes) {
             if((end_head = strstr(con->buffer,"\r\n\r\n")) != NULL || 
                 (end_head = strstr(con->buffer,"\n\n")) != NULL) {
                 int header_size = end_head - con->buffer + 4;
-                // printf("Header Size: %d\n", header_size);
                 //Extract content_size
                 int cont_size = 0;
                 char * search_buf =  (char *) malloc(10000000);
                 memcpy(search_buf,con->buffer,con->buf_size);
                 char * curr_line = strtok(search_buf, delim);
                 while((curr_line = strtok(NULL, delim)) != NULL){
-                    // printf("Search currline: %s\n", curr_line);
                     if((memcmp(&curr_line[0],&content_len[0],15)) == 0){
                         char c;
                         int start_i = 16;
@@ -1127,8 +1012,6 @@ bool add_msg_buf(struct connection * con, char * buffer, int numbytes) {
                             cont_size *= 10;
                             cont_size += (c - 48);
                             start_i++;
-                            // printf("%d\n", cont_size);
-
                         }
                     }
                 }
@@ -1137,10 +1020,7 @@ bool add_msg_buf(struct connection * con, char * buffer, int numbytes) {
             }
         }
     }
-    // printf("Adding %d bytes to msg buf client %d\n", numbytes, con->client_sock);
-    printf("Total so far: %d/%d from socket %d\n", con->buf_size, con->final_size, con->server_sock);
     if(con->buf_size >= con->final_size) {
-        printf("Finished loading buffer of size %d\n", con->buf_size);
         return true;
     }else return false;
 }
@@ -1177,13 +1057,11 @@ int rate_limit(struct connection * con, int socket) {
         int time_elapsed;
         if(socket == con->client_sock) {
             time_elapsed = ((int)curr_time) - (int)(con->client_bucket.last_updated);
-            // printf("Time elapsed: %d\n", time_elapsed);
             con->client_bucket.tokens = min(BPS, con->client_bucket.tokens + (time_elapsed * BPS));
             con->client_bucket.last_updated = curr_time;
             return con->client_bucket.tokens;
         }else if(socket == con->server_sock) {
             time_elapsed = ((int)curr_time) - (int)(con->server_bucket.last_updated);
-            // printf("Time elapsed: %d\n", time_elapsed);
             con->server_bucket.tokens = min(BPS, con->server_bucket.tokens + time_elapsed * BPS);
             con->server_bucket.last_updated = curr_time;
             return con->server_bucket.tokens;
@@ -1206,7 +1084,6 @@ struct blockedTable * create_blockList() {
 
 // Prepends a blockednode in its correct cache slot
 void prepend_blocked_node(struct blockedTable * blockList, struct blockedNode * node) {
-    printf("Attempting to prepend blocked node\n");
     if(blockList == NULL || blockList->table == NULL || node == NULL) {
         return;
     }
@@ -1216,7 +1093,6 @@ void prepend_blocked_node(struct blockedTable * blockList, struct blockedNode * 
         blockList->table[hash_val] = node;
         node->prev = NULL;
         node->next = NULL;
-        printf("Successfully prepended blockednode, first node in this chain\n");
         blockList->num_elements += 1;
         return;
     }
@@ -1225,16 +1101,13 @@ void prepend_blocked_node(struct blockedTable * blockList, struct blockedNode * 
     node->next = temp;
     node->prev = NULL;
     blockList->num_elements += 1;
-    printf("Successfully prepended blockednode\n");
 }
 
 int search_blockList(struct blockedTable * blockList, char * host) {
     if(blockList == NULL){
         return 0;
     }
-    printf("Searching blockList for headerHost: %s\n", host);
     int hash_val = (int)(hash(host)%BLOCKED_SIZE);
-    printf("Searching chain index %d\n", hash_val);
     int found = search_blockedChain(blockList->table[hash_val], host);
     if(found == 1) {
         return 1;
@@ -1245,14 +1118,11 @@ int search_blockList(struct blockedTable * blockList, char * host) {
 
 int search_blockedChain(struct blockedNode * head, char * host) {
     if(head == NULL) {
-        printf("Chain is empty\n");
         return 0;
     }
     struct blockedNode * temp = head;
     while(temp != NULL) {
-        printf("Object host: %s\n", temp->host);
         if(strcmp(host, temp->host) == 0) {
-            printf("Found in chain\n");
             return 1;
         }
         temp = temp->next;
